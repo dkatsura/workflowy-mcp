@@ -188,7 +188,7 @@ Vercel is the easiest hosted path, but the app can also run in a Docker containe
 Create a `Dockerfile`:
 
 ```dockerfile
-FROM node:20-alpine
+FROM node:22-alpine
 
 WORKDIR /app
 
@@ -315,3 +315,46 @@ Authorization: Bearer dev-mcp-secret
 - Successful `edit_doc` calls trigger targeted cache refreshes for affected nodes and parent lists, then mark the full cache stale for later reconciliation.
 - Server logs redact obvious secret, token, API key, password, and credential fields before storing metadata.
 - This is a personal deployment model. For shared or multi-user hosting, add a stronger account/auth layer first.
+
+
+## Fork maintenance and validation
+
+This fork updates Next.js and the MCP transport dependencies and supports literal
+Japanese substring searches in node titles and notes, alongside PostgreSQL
+full-text ranking. Substring matching may scan the account's cache on large outlines.
+
+Use Node.js 22.18 or newer. Install from the committed lockfile with `npm ci`.
+The `mcp-handler` 1.1.0 release pins SDK 1.26.0; this fork overrides that pin with
+the patched SDK selected in `package.json`. Keep the transport smoke tests when
+updating either package. PostCSS is overridden to a patched 8.5 release as well.
+Tool-description registrations are scoped to each MCP server instance.
+
+Validation:
+
+```sh
+npm test
+npm run build
+npm run test:transport
+npm audit
+```
+
+Search tests execute the production SQL against PGlite (PostgreSQL in WASM),
+including Japanese text, account isolation, completed items and literal special
+characters. Transport tests exercise the built Next.js route with SDK clients
+in memory, including concurrent clients, bearer authentication and signed admin
+cookies. They use dummy credentials and make no Workflowy or Neon requests.
+A deployed HTTPS connection and real Workflowy/Neon reads and writes still need
+separate validation.
+
+### Data and access boundaries
+
+This remains a personal, single-owner server. `search_nodes` can automatically
+export all accessible Workflowy nodes into your Neon database. Node titles and
+notes are stored as readable database fields; the hashed API key is an account
+identifier, not encryption of note contents. Changing an API key does not delete
+cache rows belonging to the previous key. Manage old data in your own database.
+
+The MCP secret grants all exposed tools, including node deletion and moves.
+This fork does not add subtree restrictions, a read-only mode, login throttling,
+or backups. Keep the admin and MCP secrets distinct and random. Set
+`ALLOWED_ORIGINS` for browser clients, and configure hosting-level rate limits.

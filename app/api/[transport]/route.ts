@@ -1,4 +1,5 @@
 import { createHash } from "crypto";
+import { queryCachedNodes } from "../../lib/search-query";
 import { createMcpHandler, withMcpAuth } from "mcp-handler";
 import type { AuthInfo } from "@modelcontextprotocol/sdk/server/auth/types.js";
 import type { RegisteredTool } from "@modelcontextprotocol/sdk/server/mcp.js";
@@ -79,7 +80,7 @@ interface McpLogInput {
 }
 
 let dbPromise: Promise<SqlClient> | undefined;
-const registeredTools: Partial<Record<McpToolName, RegisteredTool>> = {};
+type ToolRegistry = Partial<Record<McpToolName, RegisteredTool>>;
 
 async function getDb(): Promise<SqlClient> {
   if (dbPromise) {
@@ -384,7 +385,7 @@ async function getSettingsForApiKey(apiKey: string): Promise<{
   return { sql, accountKey, settings };
 }
 
-function updateRegisteredToolDescriptions(settings: McpSettings): void {
+function updateRegisteredToolDescriptions(settings: McpSettings, registeredTools: ToolRegistry): void {
   for (const [name, tool] of Object.entries(registeredTools) as Array<
     [McpToolName, RegisteredTool | undefined]
   >) {
@@ -392,9 +393,9 @@ function updateRegisteredToolDescriptions(settings: McpSettings): void {
   }
 }
 
-async function refreshRegisteredToolDescriptions(apiKey: string): Promise<void> {
+async function refreshRegisteredToolDescriptions(apiKey: string, registeredTools: ToolRegistry): Promise<void> {
   const { settings } = await getSettingsForApiKey(apiKey);
-  updateRegisteredToolDescriptions(settings);
+  updateRegisteredToolDescriptions(settings, registeredTools);
 }
 
 function updateServerInstructions(
@@ -447,15 +448,6 @@ function toIsoFromWorkflowyTimestamp(value: number | null | undefined): string |
     return null;
   }
   return new Date(value * 1000).toISOString();
-}
-
-function tokenizeQuery(query: string): string[] {
-  return query
-    .toLowerCase()
-    .split(/[^a-z0-9]+/i)
-    .map((word) => word.trim())
-    .filter(Boolean)
-    .slice(0, 12);
 }
 
 async function getSyncMeta(
@@ -823,6 +815,11 @@ async function searchCachedNodes({
   includeCompleted: boolean;
   limit: number;
 }) {
+  const normalizedQuery = query.trim();
+  if (!normalizedQuery) {
+    throw new Error("query must contain non-whitespace text");
+  }
+
   const sql = await getDb();
   const autoSync = await ensureCacheFresh(apiKey, accountKey);
   const cacheStatus = autoSync.cache_status;
@@ -837,44 +834,9 @@ async function searchCachedNodes({
     };
   }
 
-  const normalizedQuery = query.trim();
-  const queryWords = tokenizeQuery(normalizedQuery);
-  if (!normalizedQuery || queryWords.length === 0) {
-    return {
-      error: "query must contain at least one searchable word",
-      cache_status: cacheStatus,
-      auto_sync: autoSync,
-      results: [],
-    };
-  }
-
-  const rows = (await sql`
-    WITH search_query AS (
-      SELECT websearch_to_tsquery('simple', ${normalizedQuery}) AS query
-    )
-    SELECT
-      id,
-      name,
-      note,
-      parent_id,
-      completed,
-      children_count,
-      priority,
-      created_at,
-      updated_at,
-      completed_at,
-      ts_rank_cd(
-        to_tsvector('simple', coalesce(name, '') || ' ' || coalesce(note, '')),
-        search_query.query
-      ) AS relevance_score
-    FROM workflowy_nodes, search_query
-    WHERE account_key = ${accountKey}
-      AND (${includeCompleted} OR completed = FALSE)
-      AND to_tsvector('simple', coalesce(name, '') || ' ' || coalesce(note, ''))
-        @@ search_query.query
-    ORDER BY relevance_score DESC, updated_at DESC NULLS LAST, priority ASC
-    LIMIT ${limit}
-  `) as CachedNodeRow[];
+  const rows = (await queryCachedNodes(
+    sql, accountKey, normalizedQuery, includeCompleted, limit,
+  )) as CachedNodeRow[];
 
   return {
     cache_status: cacheStatus,
@@ -1531,6 +1493,7 @@ async function buildServerInstructions(apiKey: string): Promise<string> {
 
 const handler = createMcpHandler(
   async (server) => {
+    const registeredTools: ToolRegistry = {};
     registeredTools.list_bookmarks = server.tool(
       "list_bookmarks",
       DEFAULT_TOOL_DESCRIPTIONS.list_bookmarks,
@@ -1937,7 +1900,7 @@ const handler = createMcpHandler(
         const apiKey = getApiKey(extra);
         const accountKey = accountKeyFromApiKey(apiKey);
         const startedAt = Date.now();
-        await refreshRegisteredToolDescriptions(apiKey).catch(() => undefined);
+        await refreshRegisteredToolDescriptions(apiKey, registeredTools).catch(() => undefined);
         const result = (await originalListToolsHandler(request, extra)) as {
           tools: unknown[];
         };
@@ -1957,7 +1920,7 @@ const handler = createMcpHandler(
 
     const envApiKey = getWorkflowyApiKey();
     if (envApiKey) {
-      await refreshRegisteredToolDescriptions(envApiKey).catch(() => undefined);
+      await refreshRegisteredToolDescriptions(envApiKey, registeredTools).catch(() => undefined);
       await buildServerInstructions(envApiKey)
         .then((instructions) => updateServerInstructions(protocolServer, instructions))
         .catch(() => undefined);
@@ -2057,12 +2020,12 @@ function withCors(response: Response, request: Request): Response {
 const authHandler = withMcpAuth(handler, verifyToken, { required: true });
 const runAuthHandler = authHandler as (
   request: Request,
-  context?: { params?: { transport?: string } },
+  context?: { params: Promise<{ transport: string }> },
 ) => Response | Promise<Response>;
 
 async function route(
   request: Request,
-  context: { params?: { transport?: string } },
+  context: { params: Promise<{ transport: string }> },
 ): Promise<Response> {
   if (!originIsAllowed(request)) {
     return new Response("Origin not allowed", { status: 403 });

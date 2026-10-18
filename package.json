@@ -5,23 +5,35 @@
   "scripts": {
     "dev": "next dev",
     "build": "next build",
-    "start": "next start"
+    "start": "next start",
+    "test": "node --experimental-strip-types --test tests/*.test.ts",
+    "test:transport": "node --test --test-force-exit tests/transport.test.cjs"
   },
   "keywords": [],
   "author": "",
   "license": "MIT",
   "dependencies": {
-    "@modelcontextprotocol/sdk": "^1.0.0",
+    "@modelcontextprotocol/sdk": "^1.32.1",
     "@neondatabase/serverless": "^0.10.0",
-    "mcp-handler": "^1.0.4",
-    "next": "^14.2.0",
+    "mcp-handler": "1.1.0",
+    "next": "^15.5.28",
     "react": "^18.2.0",
     "react-dom": "^18.2.0",
-    "zod": "^3.24.2"
+    "zod": "^3.25.76"
   },
   "devDependencies": {
     "@types/node": "^22.13.10",
     "@types/react": "^18.2.0",
-    "typescript": "^5.4.0"
+    "typescript": "^5.4.0",
+    "@electric-sql/pglite": "0.5.10"
+  },
+  "overrides": {
+    "mcp-handler": {
+      "@modelcontextprotocol/sdk": "$@modelcontextprotocol/sdk"
+    },
+    "postcss": "8.5.30"
+  },
+  "engines": {
+    "node": ">=22.18.0"
   }
 }
