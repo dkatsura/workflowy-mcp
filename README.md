@@ -358,3 +358,19 @@ The MCP secret grants all exposed tools, including node deletion and moves.
 This fork does not add subtree restrictions, a read-only mode, login throttling,
 or backups. Keep the admin and MCP secrets distinct and random. Set
 `ALLOWED_ORIGINS` for browser clients, and configure hosting-level rate limits.
+
+### Neon project setup
+
+`neon.ts` declares a Postgres-only setup with Auth disabled. The project and
+branch link is stored in the git-ignored `.neon`; credentials belong in
+`.env.local` (also ignored). Existing handlers already read `DATABASE_URL`
+with the Neon HTTP driver, so no additional backend service is required.
+
+After linking and deploying the Neon configuration, run `npm run test:db`
+with Node.js 22.18 or newer. It runs the production search SQL against the
+configured database using synthetic rows in a transaction-local temporary
+table. The test checks Japanese title/note search and account isolation;
+the temporary table is dropped at transaction completion. It does not call
+Workflowy or populate the persistent cache. Full application verification
+still requires the admin/MCP secrets, the Workflowy API key and a running
+HTTP server.
