@@ -1,3 +1,4 @@
+import { oauthIdentity, issuer as oauthIssuer } from "../../lib/oauth/server";
 import { createHash } from "crypto";
 import { queryCachedNodes } from "../../lib/search-query";
 import { createMcpHandler, withMcpAuth } from "mcp-handler";
@@ -1938,6 +1939,13 @@ const verifyToken = async (
     return undefined;
   }
 
+  if (bearerToken.startsWith("wf_at_")) {
+    const identity = await oauthIdentity(bearerToken);
+    const apiKey = getWorkflowyApiKey();
+    if (!identity || !apiKey) return undefined;
+    return { token: apiKey, scopes: ["workflowy"], clientId: identity.client_id };
+  }
+
   const accessSecret = getMcpAccessSecret();
   if (!accessSecret) {
     return undefined;
@@ -2031,7 +2039,13 @@ async function route(
     return new Response("Origin not allowed", { status: 403 });
   }
 
-  return withCors(await runAuthHandler(request, context), request);
+  const response = await runAuthHandler(request, context);
+  if (response.status === 401) {
+    try {
+      response.headers.set("WWW-Authenticate", `Bearer resource_metadata="${oauthIssuer()}/.well-known/oauth-protected-resource", scope="workflowy"`);
+    } catch { /* Existing bearer-only deployments can still operate. */ }
+  }
+  return withCors(response, request);
 }
 
 async function options(

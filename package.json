@@ -8,7 +8,8 @@
     "start": "next start",
     "test": "node --experimental-strip-types --test tests/*.test.ts",
     "test:transport": "node --test --test-force-exit tests/transport.test.cjs",
-    "test:db": "node --experimental-strip-types scripts/verify-neon-db.mjs"
+    "test:db": "node --experimental-strip-types scripts/verify-neon-db.mjs",
+    "test:oauth-http": "node --test --test-force-exit tests/oauth-http.test.cjs"
   },
   "keywords": [],
   "author": "",
