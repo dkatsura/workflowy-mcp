@@ -47,6 +47,7 @@ async function consent(cookie='') {
   const response=await call('authorize',new NextRequest(base+'/oauth/authorize?'+query,{headers:{Cookie:cookie}}));
   assert.equal(response.status,200);
   assert.match(response.headers.get('content-security-policy'),/frame-ancestors 'none'/);
+  assert.equal(response.headers.get('referrer-policy'),'strict-origin');
   const html=await response.text();
   const proof=html.match(/name="proof" value="([^"]+)"/)[1];
   const cookies=[cookie,response.headers.get('set-cookie').split(';')[0]].filter(Boolean).join('; ');
@@ -64,6 +65,7 @@ test('consent requires a signed browser-bound proof and same-origin POST; no GET
   const c=await consent();assert.match(c.html,/name="secret"/);
   assert.equal((await form('authorize',{proof:c.proof,decision:'allow'},{Origin:base})).status,403);
   assert.equal((await form('authorize',{proof:c.proof,decision:'allow'},{Origin:'https://evil.example',Cookie:c.cookies})).status,403);
+  assert.equal((await form('authorize',{proof:c.proof,decision:'allow'},{Origin:'null',Cookie:c.cookies})).status,403);
   assert.equal((await form('authorize',{proof:c.proof+'x',decision:'allow'},{Origin:base,Cookie:c.cookies})).status,400);
   assert.equal((await form('authorize',{proof:c.proof,decision:'allow',secret:'wrong'},{Origin:base,Cookie:c.cookies})).status,401);
   assert.equal((await db.query('SELECT count(*)::int AS n FROM workflowy_oauth_grants')).rows[0].n,0);

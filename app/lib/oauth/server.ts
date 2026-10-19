@@ -54,7 +54,8 @@ export function metadata(protectedResource: boolean) {
 const esc = (value: string) => value.replace(/[&<>"']/g, x => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[x]!));
 function html(body: string, status = 200) {
   return new NextResponse(`<!doctype html><html lang="ja"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width"><title>WorkFlowy MCP — 接続の許可</title><style>body{font:16px/1.7 system-ui;background:#111827;color:#f9fafb;max-width:640px;margin:60px auto;padding:24px}input,button{font:inherit;padding:10px;margin:8px 0}input{width:90%}button{cursor:pointer}a{color:#93c5fd}small{overflow-wrap:anywhere}article{border-top:1px solid #475569;padding:16px 0}</style></head><body>${body}</body></html>`, {
-    status, headers: {...baseHeaders,'Content-Type':'text/html; charset=utf-8','X-Frame-Options':'DENY',
+    status, // Native form POSTs need a real Origin for CSRF validation; no-referrer makes it null.
+    headers: {...baseHeaders,'Referrer-Policy':'strict-origin','Content-Type':'text/html; charset=utf-8','X-Frame-Options':'DENY',
       'Content-Security-Policy':"default-src 'none'; style-src 'unsafe-inline'; form-action 'self' https://chatgpt.com/connector_platform_oauth_redirect https://chatgpt.com/connector/oauth/; frame-ancestors 'none'; base-uri 'none'"},
   });
 }
