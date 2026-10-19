@@ -2,7 +2,9 @@
 
 A remote, self-hosted MCP server for Workflowy. Deploy it to Vercel, store your Workflowy credentials server-side, and connect from MCP clients that support Streamable HTTP.
 
-This is the hosted companion to [workflowy-local-mcp](https://github.com/rodolfo-terriquez/workflowy-local-mcp). Use the local app when you want everything to stay on your machine. Use this project when you want a remote MCP endpoint that works from places where a local MCP process is not available.
+This fork adds ChatGPT OAuth access, Japanese substring search, and transport/security fixes to [rodolfo-terriquez/workflowy-mcp](https://github.com/rodolfo-terriquez/workflowy-mcp). It is intended for a single owner and is not independently security-audited.
+
+The upstream project is the hosted companion to [workflowy-local-mcp](https://github.com/rodolfo-terriquez/workflowy-local-mcp). Use the local app when you want everything to stay on your machine. Use this project when you want a remote MCP endpoint that works from places where a local MCP process is not available.
 
 ## Current State
 
@@ -37,12 +39,14 @@ The server also exposes a `server_instructions` MCP prompt. It combines the defa
 
 ## How Auth Works
 
+ChatGPT connects through this server’s OAuth flow; Workflowy continues to use its API key on the server. Other clients can use a static bearer header.
+
 There are two separate secrets:
 
 | Secret | Where it goes | What it protects |
 | --- | --- | --- |
-| `ADMIN_SECRET` | Vercel environment only; typed into the web console login | The owner-only web interface |
-| `MCP_ACCESS_SECRET` | Vercel environment and your MCP client header | The `/api/mcp` endpoint |
+| `ADMIN_SECRET` | Vercel environment only; typed into the web console login | The owner-only web interface and OAuth approval |
+| `MCP_ACCESS_SECRET` | Vercel environment; client header only for static bearer clients | The `/api/mcp` endpoint |
 
 Your Workflowy key is different:
 
@@ -133,9 +137,51 @@ Your MCP endpoint is:
 https://YOUR-VERCEL-APP.vercel.app/api/mcp
 ```
 
-Vercel automatically creates the Neon tables on first use.
+The application creates its Neon tables on first use with the configured database role.
 
-## Connect An MCP Client
+## Connect ChatGPT With OAuth
+
+ChatGPT's custom MCP connector does not accept a manually supplied bearer header.
+Choose **OAuth**, use the production `/api/mcp` URL, and leave Client ID and
+Client Secret empty for dynamic client registration. If offered a registration
+method, choose **DCR**. Follow the redirect to this server, sign in with the
+existing `ADMIN_SECRET`, review the permissions, and explicitly approve.
+This deployment is for one owner; it does not provide public user signup.
+
+OAuth discovery, authorization, token exchange and revocation are hosted by this
+app. Workflowy still uses its server-side API key. No additional service is
+required. The issuer defaults to `https://${VERCEL_PROJECT_PRODUCTION_URL}`;
+set `OAUTH_ISSUER` to the exact canonical HTTPS origin on other hosts. Use this
+same origin for the ChatGPT endpoint. Preview deployments cannot authorize
+production connections. The issuer must not change while connections are active.
+
+The implementation accepts only ChatGPT's exact stable callback or its bounded
+callback-ID path, public DCR clients and authorization code + S256 PKCE. Client
+IDs are signed public metadata, not access credentials. Consent is protected by
+an expiring signed proof bound to an HttpOnly browser cookie and admin session,
+a same-origin POST, and frame denial. Code redemption is atomic and single-use.
+Tokens are random and only their hashes are persisted in dedicated Neon tables.
+Access tokens expire in one hour. Refresh tokens rotate and expire absolutely
+after 30 days; replay revokes the grant. Resource and owner binding are checked
+on every OAuth request. Rotating `ADMIN_SECRET` or `WORKFLOWY_API_KEY` invalidates
+existing OAuth grants (and rotating `ADMIN_SECRET` invalidates registered client
+IDs, requiring a fresh ChatGPT connection).
+
+Use **Setup → Manage or revoke ChatGPT connections** (`/oauth/connections`) to
+revoke a grant, immediately invalidating its access and refresh tokens. The
+existing bearer-secret connection and admin console continue to work. Locking
+the admin console does **not** revoke previously approved ChatGPT connections.
+All exposed tools, including edits and deletion, are included in the `workflowy`
+scope. This is not a read-only permission or a subtree boundary.
+
+Run `npm test`, `npm run build`, `npm run test:transport`, and
+`npm run test:oauth-http`. OAuth SQL tests use isolated Postgres via PGlite. HTTP
+tests execute built production routes against that isolated database, including
+consent/CSRF rejection, code exchange, authenticated MCP calls, refresh and
+revocation. They never use real credentials or call Workflowy. Live ChatGPT
+linking still needs to be verified in the actual client.
+
+## Connect A Client With A Bearer Header
 
 Use Streamable HTTP, not stdio.
 
@@ -270,17 +316,18 @@ After that, `list_bookmarks` and the `server_instructions` prompt will include t
 Install dependencies:
 
 ```sh
-npm install
+npm ci
 ```
 
-Create `.env.local`:
+Copy the blank template and fill in your own values:
 
-```text
-DATABASE_URL=postgres://...
-ADMIN_SECRET=dev-admin-secret
-MCP_ACCESS_SECRET=dev-mcp-secret
-WORKFLOWY_API_KEY=your-workflowy-api-key
+```sh
+cp .env.example .env.local
 ```
+
+Generate distinct random admin and MCP secrets; do not reuse documentation or
+test values. Keep `.env.local` on your machine. Local bearer-client testing uses
+the same `MCP_ACCESS_SECRET` you set there.
 
 Run Next.js:
 
@@ -298,12 +345,6 @@ Local MCP endpoint:
 
 ```text
 http://localhost:3000/api/mcp
-```
-
-For local client testing, use:
-
-```text
-Authorization: Bearer dev-mcp-secret
 ```
 
 ## Operational Notes
@@ -335,6 +376,7 @@ Validation:
 npm test
 npm run build
 npm run test:transport
+npm run test:oauth-http
 npm audit
 ```
 
@@ -355,8 +397,9 @@ identifier, not encryption of note contents. Changing an API key does not delete
 cache rows belonging to the previous key. Manage old data in your own database.
 
 The MCP secret grants all exposed tools, including node deletion and moves.
-This fork does not add subtree restrictions, a read-only mode, login throttling,
-or backups. Keep the admin and MCP secrets distinct and random. Set
+This fork does not add subtree restrictions, a read-only mode, or backups.
+The OAuth approval form limits failed secret attempts; the separate admin login
+endpoint currently has no application-level throttling. Keep the admin and MCP secrets distinct and random. Set
 `ALLOWED_ORIGINS` for browser clients, and configure hosting-level rate limits.
 
 ### Neon project setup
@@ -375,44 +418,8 @@ Workflowy or populate the persistent cache. Full application verification
 still requires the admin/MCP secrets, the Workflowy API key and a running
 HTTP server.
 
-### ChatGPT OAuth connection
+## Security And Contributions
 
-ChatGPT's custom MCP connector does not accept a manually supplied bearer header.
-Choose **OAuth**, use the production `/api/mcp` URL, and leave Client ID and
-Client Secret empty for dynamic client registration. If offered a registration
-method, choose **DCR**. Follow the redirect to this server, sign in with the
-existing `ADMIN_SECRET`, review the permissions, and explicitly approve.
-This deployment is for one owner; it does not provide public user signup.
-
-OAuth discovery, authorization, token exchange and revocation are hosted by this
-app. Workflowy still uses its server-side API key. No additional service is
-required. The issuer defaults to `https://${VERCEL_PROJECT_PRODUCTION_URL}`;
-set `OAUTH_ISSUER` to the exact canonical HTTPS origin on other hosts. Use this
-same origin for the ChatGPT endpoint. Preview deployments cannot authorize
-production connections. The issuer must not change while connections are active.
-
-The implementation accepts only ChatGPT's exact stable callback or its bounded
-callback-ID path, public DCR clients and authorization code + S256 PKCE. Client
-IDs are signed public metadata, not access credentials. Consent is protected by
-an expiring signed proof bound to an HttpOnly browser cookie and admin session,
-a same-origin POST, and frame denial. Code redemption is atomic and single-use.
-Tokens are random and only their hashes are persisted in dedicated Neon tables.
-Access tokens expire in one hour. Refresh tokens rotate and expire absolutely
-after 30 days; replay revokes the grant. Resource and owner binding are checked
-on every OAuth request. Rotating `ADMIN_SECRET` or `WORKFLOWY_API_KEY` invalidates
-existing OAuth grants (and rotating `ADMIN_SECRET` invalidates registered client
-IDs, requiring a fresh ChatGPT connection).
-
-Use **Setup → Manage or revoke ChatGPT connections** (`/oauth/connections`) to
-revoke a grant, immediately invalidating its access and refresh tokens. The
-existing bearer-secret connection and admin console continue to work. Locking
-the admin console does **not** revoke previously approved ChatGPT connections.
-All exposed tools, including edits and deletion, are included in the `workflowy`
-scope. This is not a read-only permission or a subtree boundary.
-
-Run `npm test`, `npm run build`, `npm run test:transport`, and
-`npm run test:oauth-http`. OAuth SQL tests use isolated Postgres via PGlite. HTTP
-tests execute built production routes against that isolated database, including
-consent/CSRF rejection, code exchange, authenticated MCP calls, refresh and
-revocation. They never use real credentials or call Workflowy. Live ChatGPT
-linking still needs to be verified in the actual client.
+Read [SECURITY.md](SECURITY.md) for stored data, access boundaries, and reporting
+precautions. See [CONTRIBUTING.md](CONTRIBUTING.md) for local validation and safe
+fixtures. Preserve the upstream [MIT license](LICENSE) and attribution.
